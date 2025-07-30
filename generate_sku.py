@@ -32,25 +32,19 @@ class SKUGenerator:
         else:
             raise ValueError("Model type must be 'gemini'")
 
-    def process_with_gemini(self, image_paths: List[str], sku: str) -> str:
-        """Process images with Google Gemini Pro Vision"""
-        # Load images
-        images = []
-        for img_path in image_paths:
-            img = Image.open(img_path)
-            images.append(img)
+    def get_enhanced_prompt(self, reference_number: str, chinese_context: str = "") -> str:
+        """Get the enhanced prompt template with SKU generation"""
+        return f"""Analyze these product images and generate a detailed product description in the following format:
 
-        # Create prompt
-        prompt = f"""Analyze these product images and generate a detailed product description in the following format:
-
-SKU: {sku}
+Reference Number: {reference_number}
+SKU: [Generate SKU in format: BRAND_CATEGORY_MODEL_COLOR_REFERENCENUMBER]
 Brand: [Brand Name]
 Model: [Model Name]
 Material: [Material Description]
-Color: [Color Description]
-Size: [Size Information]
+Color: [Color Description,e.g., BLACK, WHITE, BEIGE, RED, BLUE, BROWN, PINK]
+Size: [Size Information, provide mini,small,medium,large with the numbers]
 Year of Production: [Year if identifiable]
-Category: [Category]
+Category: [Category, e.g. BAG, WATCH, SHOE...]
 Sub-category: [Sub-category]
 Condition Grade: [Condition Percentage]
 Condition Description: [Detailed condition description]
@@ -60,29 +54,24 @@ Details:
 
 Accessories: [List any accessories]
 Retail Price: [If known, with source URL]
-Recommended Selling Price: [Price in GBP and JPY with source URLs for market research]
-Reference Number: [Reference number if visible]
+Recommended Selling Price: [Price in GBP with source URLs for market research]
 
-PRICING SOURCES: For any pricing information, you MUST provide ONLY real, verifiable URLs from these specific sources:
-- Chanel official website: https://www.chanel.com
-- Farfetch: https://www.farfetch.com
-- Net-a-Porter: https://www.net-a-porter.com
-- The RealReal: https://www.therealreal.com
-- Vestiaire Collective: https://www.vestiairecollective.com
-- Christie's: https://www.christies.com
-- Sotheby's: https://www.sothebys.com
+PRICING SOURCES: For any pricing information, you MUST provide ONLY real, verifiable URLs. DO NOT make up URLs.
 
-DO NOT make up URLs. If you cannot find a specific product page, state "Source: [Website name] - similar products available" or "Market research based on comparable items."
+SKU FORMAT RULES:
+- Use format: BRAND_CATEGORY_MODEL_COLOR_REFERENCENUMBER
+- BRAND: Clean brand name (e.g., CHANEL, LOUISVUITTON, HERMES, GUCCI)
+- CATEGORY: product category (e.g., BAG, SHOE, WATCH)
+- MODEL: Bag model (e.g., LEBOY, CLASSIC, FLAP, WOC, SPEEDYNANO, KELLY, BIRKIN)
+- COLOR: Main color (e.g., BLACK, WHITE, BEIGE, RED, BLUE, BROWN, PINK)
+- REFERENCENUMBER: The provided reference number
+
+{chinese_context}
 
 Please be thorough and accurate in your analysis."""
 
-        # Generate content
-        model = genai.GenerativeModel('gemini-2.5-flash')
-        response = model.generate_content([prompt] + images)
-        
-        return response.text
-
-    def process_with_gemini_enhanced(self, image_paths: List[str], reference_number: str, chinese_context: str = "") -> str:
+    def process_with_gemini_enhanced(self, image_paths: List[str], reference_number: str, 
+                                   chinese_context: str = "", custom_prompt: str = None) -> str:
         """Process images with Google Gemini Pro Vision with enhanced Chinese context"""
         # Load images
         images = []
@@ -94,50 +83,11 @@ Please be thorough and accurate in your analysis."""
                 print(f"Warning: Could not process image {img_path}: {e}")
                 continue
 
-        # Create prompt
-        prompt = f"""Analyze these product images and generate a detailed product description in the following format:
-
-Reference Number: {reference_number}
-SKU: [Generate SKU in format: BRAND_MODELTYPE_COLOR_REFERENCENUMBER]
-Brand: [Brand Name]
-Model: [Model Name]
-Material: [Material Description]
-Color: [Color Description]
-Size: [Size Information]
-Year of Production: [Year if identifiable]
-Category: [Category]
-Sub-category: [Sub-category]
-Condition Grade: [Condition Percentage]
-Condition Description: [Detailed condition description]
-
-Details:
-- [Detailed observations about exterior, interior, hardware, etc.]
-
-Accessories: [List any accessories]
-Retail Price: [If known, with source URL]
-Recommended Selling Price: [Price in GBP and JPY with source URLs for market research]
-
-PRICING SOURCES: For any pricing information, you MUST provide ONLY real, verifiable URLs from these specific sources:
-- Chanel official website: https://www.chanel.com
-- Farfetch: https://www.farfetch.com
-- Net-a-Porter: https://www.net-a-porter.com
-- The RealReal: https://www.therealreal.com
-- Vestiaire Collective: https://www.vestiairecollective.com
-- Christie's: https://www.christies.com
-- Sotheby's: https://www.sothebys.com
-
-DO NOT make up URLs. If you cannot find a specific product page, state "Source: [Website name] - similar products available" or "Market research based on comparable items."
-
-SKU FORMAT RULES:
-- Use format: BRAND_MODELTYPE_COLOR_REFERENCENUMBER
-- BRAND: Clean brand name (e.g., CHANEL, LOUISVUITTON, HERMES, GUCCI)
-- MODELTYPE: Bag type (e.g., LEBOY, CLASSIC, FLAP, WOC, SPEEDY, KELLY, BIRKIN)
-- COLOR: Main color (e.g., BLACK, WHITE, BEIGE, RED, BLUE, BROWN, PINK)
-- REFERENCENUMBER: The provided reference number
-
-{chinese_context}
-
-Please be thorough and accurate in your analysis."""
+        # Use custom prompt or enhanced default
+        if custom_prompt:
+            prompt = custom_prompt
+        else:
+            prompt = self.get_enhanced_prompt(reference_number, chinese_context)
 
         # Generate content
         model = genai.GenerativeModel('gemini-2.5-flash')
@@ -169,8 +119,8 @@ Please be thorough and accurate in your analysis."""
         print(f"Processing {len(image_files)} images for SKU: {sku}")
         print(f"Images: {', '.join([Path(f).name for f in image_files])}")
         
-        # Process with Gemini
-        description = self.process_with_gemini(image_files, sku)
+        # Process with Gemini enhanced method
+        description = self.process_with_gemini_enhanced(image_files, sku, "")
         
         # Save to output file
         with open(output_file, 'w', encoding='utf-8') as f:
