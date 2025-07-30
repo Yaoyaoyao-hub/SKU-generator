@@ -268,6 +268,55 @@ def main():
             placeholder="例如：香奈儿 Le Boy 小号黑色小羊皮包包，成色很好，轻微使用痕迹..."
         )
         
+        # Prompt customization section
+        st.markdown("---")
+        st.markdown("### 🤖 AI Prompt Customization")
+        
+        # Default prompt template
+        default_prompt = """Analyze these product images and generate a detailed product description in the following format:
+
+Reference Number: {reference_number}
+SKU: [Generate SKU in format: BRAND_CATEGORY_MODEL_COLOR_REFERENCENUMBER]
+Brand: [Brand Name]
+Model: [Model Name]
+Material: [Material Description]
+Color: [Color Description,e.g., BLACK, WHITE, BEIGE, RED, BLUE, BROWN, PINK]
+Size: [Size Information, provide mini,small,medium,large with the numbers]
+Year of Production: [Year if identifiable]
+Category: [Category, e.g. BAG, WATCH, SHOE...]
+Sub-category: [Sub-category]
+Condition Grade: [Condition Percentage]
+Condition Description: [Detailed condition description]
+
+Details:
+- [Detailed observations about exterior, interior, hardware, etc.]
+
+Accessories: [List any accessories]
+Retail Price: [If known, with source URL]
+Recommended Selling Price: [Price in GBP with source URLs for market research]
+
+PRICING SOURCES: For any pricing information, you MUST provide ONLY real, verifiable URLs. DO NOT make up URLs.
+
+SKU FORMAT RULES:
+- Use format: BRAND_CATEGORY_MODEL_COLOR_REFERENCENUMBER
+- BRAND: Clean brand name (e.g., CHANEL, LOUISVUITTON, HERMES, GUCCI)
+- CATEGORY: product category (e.g., BAG, SHOE, WATCH)
+- MODEL: Bag model (e.g., LEBOY, CLASSIC, FLAP, WOC, SPEEDYNANO, KELLY, BIRKIN)
+- COLOR: Main color (e.g., BLACK, WHITE, BEIGE, RED, BLUE, BROWN, PINK)
+- REFERENCENUMBER: The provided reference number
+
+{chinese_context}
+
+Please be thorough and accurate in your analysis."""
+        
+        # Custom prompt input
+        custom_prompt = st.text_area(
+            "AI Prompt Template",
+            value=default_prompt,
+            height=400,
+            help="Customize the AI prompt. Use {reference_number} and {chinese_context} as placeholders.",
+        )
+        
         # Local folder save option
         save_to_folder = st.checkbox(
             "Save to Local Folder",
@@ -462,8 +511,18 @@ CHINESE DESCRIPTION PROVIDED:
 
 Please use this Chinese description to enhance your analysis and provide more accurate details about the bag type, condition, and specifications."""
                         
-                        # Process with selected model
-                        description = generator.process_with_gemini_enhanced(image_paths, reference_number, chinese_context)
+                        # Process with selected model and custom prompt
+                        if custom_prompt: # Use custom prompt if provided
+                            # Format custom prompt with placeholders
+                            formatted_prompt = custom_prompt.format(
+                                reference_number=reference_number,
+                                chinese_context=chinese_context
+                            )
+                            description = generator.process_with_gemini_enhanced(
+                                image_paths, reference_number, chinese_context, formatted_prompt
+                            )
+                        else: # Use default enhanced prompt
+                            description = generator.process_with_gemini_enhanced(image_paths, reference_number, chinese_context)
                         
                         # Store generated description in session state
                         st.session_state.generated_description = description
