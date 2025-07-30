@@ -4,7 +4,7 @@ A simple Python script that processes product images with LLM models (Google Gem
 
 ## Features
 
-- Supports both OpenAI GPT-4 Vision and Google Gemini Pro Vision
+- Supports Google Gemini Pro Vision
 - Processes multiple images from a folder
 - Generates structured product descriptions
 - Outputs results to a text file
