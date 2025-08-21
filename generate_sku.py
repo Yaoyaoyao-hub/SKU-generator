@@ -11,6 +11,9 @@ from pathlib import Path
 from typing import List, Optional
 import json
 
+# Import prompt template
+from prompts import get_enhanced_prompt
+
 # Google Gemini imports
 try:
     import google.generativeai as genai
@@ -32,50 +35,12 @@ class SKUGenerator:
         else:
             raise ValueError("Model type must be 'gemini'")
 
-    def get_enhanced_prompt(self, reference_number: str, chinese_context: str = "") -> str:
-        """Get the enhanced prompt template with SKU generation"""
-        return f"""Analyze these product images and generate a detailed product description in the following format:
-
-Reference Number: {reference_number}
-SKU: [Generate SKU in format: BRAND_CATEGORY_MODEL_COLOR_REFERENCENUMBER]
-Brand: [Brand Name]
-Model: [Model Name]
-Material: [Material Description]
-Color: [Color Description,e.g., BLACK, WHITE, BEIGE, RED, BLUE, BROWN, PINK]
-Size: [Size Information, provide mini,small,medium,large with the numbers]
-Year of Production: [Year if identifiable]
-Category: [Category, e.g. BAG, WATCH, SHOE...]
-Sub-category: [Sub-category]
-Condition Grade: [Condition Percentage]
-Condition Description: [Detailed condition description]
-
-Details:
-- [Detailed observations about exterior, interior, hardware, etc.]
-
-Accessories: [List any accessories]
-Retail Price: [If known, with source URL]
-Recommended Selling Price: [Price in GBP with source URLs for market research]
-
-PRICING SOURCES: For any pricing information, you MUST provide ONLY real, verifiable URLs. DO NOT make up URLs.
-
-SKU FORMAT RULES:
-- Use format: BRAND_CATEGORY_MODEL_COLOR_REFERENCENUMBER
-- BRAND: Clean brand name (e.g., CHANEL, LOUISVUITTON, HERMES, GUCCI)
-- CATEGORY: product category (e.g., BAG, SHOE, WATCH)
-- MODEL: Bag model (e.g., LEBOY, CLASSIC, FLAP, WOC, SPEEDYNANO, KELLY, BIRKIN)
-- COLOR: Main color (e.g., BLACK, WHITE, BEIGE, RED, BLUE, BROWN, PINK)
-- REFERENCENUMBER: The provided reference number
-
-{chinese_context}
-
-Please be thorough and accurate in your analysis."""
-
     def process_with_gemini_enhanced(self, image_paths: List[str], reference_number: str, 
-                                   chinese_context: str = "", custom_prompt: str = None) -> str:
+                                   chinese_context: str = "", custom_prompt: str = None) -> dict:
         """Process images with Google Gemini Pro Vision with enhanced Chinese context"""
         # Load images
         images = []
-        for img_path in image_paths[:5]:  # Limit to 5 images
+        for img_path in image_paths:  # Limit to 5 images
             try:
                 img = Image.open(img_path)
                 images.append(img)
@@ -87,20 +52,88 @@ Please be thorough and accurate in your analysis."""
         if custom_prompt:
             prompt = custom_prompt
         else:
-            prompt = self.get_enhanced_prompt(reference_number, chinese_context)
+            prompt = get_enhanced_prompt(chinese_context)
 
         # Generate content
         model = genai.GenerativeModel('gemini-2.5-flash')
         response = model.generate_content([prompt] + images)
         
-        return response.text
+        # Try to parse JSON response
+        try:
+            # Clean the response text to extract JSON
+            response_text = response.text.strip()
+            
+            # Find JSON content (remove any text before or after JSON)
+            start_idx = response_text.find('{')
+            end_idx = response_text.rfind('}') + 1
+            
+            if start_idx != -1 and end_idx != 0:
+                json_text = response_text[start_idx:end_idx]
+                parsed_json = json.loads(json_text)
+                
+                # Add reference number to the JSON
+                parsed_json["reference_number"] = reference_number
+                
+                # Generate and add SKU to the JSON
+                sku = self.generate_sku_from_json(parsed_json, reference_number)
+                parsed_json["sku"] = sku
+                
+                return parsed_json
+            else:
+                raise ValueError("No JSON object found in response")
+        
+        
+        except json.JSONDecodeError as e:
+            print(f"Warning: Failed to parse JSON response: {e}")
+            print(f"Raw response: {response.text}")
+            # Return a structured error response
+            return {
+                "error": "Failed to parse JSON response",
+                "raw_response": response.text,
+                "reference_number": reference_number,
+                "sku": f"error-error-error-error-error-{reference_number}".upper()
+            }
+        except Exception as e:
+            print(f"Error processing response: {e}")
+            return {
+                "error": f"Error processing response: {str(e)}",
+                "reference_number": reference_number,
+                "sku": f"error-error-error-error-error-{reference_number}".upper()
+            }
+
+    def generate_sku_from_json(self, json_data: dict, reference_number: str) -> str:
+        """Generate SKU from JSON data in format: color-material-model-brand-subcategory-reference_number"""
+        try:
+            # Extract required fields, with fallbacks for missing data
+            color = json_data.get("color", "unknown").lower().replace(" ", "-")
+            material = json_data.get("material", "unknown").lower().replace(" ", "-")
+            model = json_data.get("model", "unknown").lower().replace(" ", "_")
+            brand = json_data.get("brand", "unknown").lower().replace(" ", "-")
+            sub_category = json_data.get("sub_category", "unknown").lower().replace(" ", "-")
+            
+            # Clean up values (remove special characters, normalize)
+            color = "".join(c for c in color if c.isalnum() or c == "-")
+            material = "".join(c for c in material if c.isalnum() or c == "-")
+            model = "".join(c for c in model if c.isalnum() or c == "-")
+            brand = "".join(c for c in brand if c.isalnum() or c == "-")
+            sub_category = "".join(c for c in sub_category if c.isalnum() or c == "-")
+            
+            # Generate SKU in the specified format
+            sku = f"{color}-{material}-{model}-{brand}-{sub_category}-{reference_number}"
+            
+            return sku.upper()
+            
+        except Exception as e:
+            print(f"Warning: Error generating SKU: {e}")
+            # Return a fallback SKU
+            return f"unknown-unknown-unknown-unknown-unknown-{reference_number}".upper()
 
     def generate_sku_description(self, folder_path: str, output_file: str):
         """Generate SKU description from images in the folder"""
         folder = Path(folder_path)
         
         # Get all image files
-        image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff'}
+        image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp'}
         image_files = []
         
         for file in folder.iterdir():
@@ -120,21 +153,30 @@ Please be thorough and accurate in your analysis."""
         print(f"Images: {', '.join([Path(f).name for f in image_files])}")
         
         # Process with Gemini enhanced method
-        description = self.process_with_gemini_enhanced(image_files, sku, "")
+        result = self.process_with_gemini_enhanced(image_files, sku, "")
         
         # Save to output file
-        with open(output_file, 'w', encoding='utf-8') as f:
-            f.write(description)
+        if output_file.endswith('.json'):
+            # Save as JSON
+            with open(output_file, 'w', encoding='utf-8') as f:
+                json.dump(result, f, indent=2, ensure_ascii=False)
+        else:
+            # Save as formatted text
+            with open(output_file, 'w', encoding='utf-8') as f:
+                if isinstance(result, dict):
+                    f.write(json.dumps(result, indent=2, ensure_ascii=False))
+                else:
+                    f.write(str(result))
         
         print(f"Generated description saved to: {output_file}")
-        return description
+        return result
 
 
 def main():
     parser = argparse.ArgumentParser(description="Generate SKU descriptions from images using Google Gemini")
     parser.add_argument("--folder", required=True, help="Path to folder containing images")
     parser.add_argument("--api-key", required=True, help="Google Gemini API key")
-    parser.add_argument("--output", default="generated_sku.txt", help="Output file path")
+    parser.add_argument("--output", default="generated_sku.json", help="Output file path (recommended: .json extension)")
     
     args = parser.parse_args()
     
@@ -144,7 +186,10 @@ def main():
         
         print("\nGenerated Description:")
         print("=" * 50)
-        print(description)
+        if isinstance(description, dict):
+            print(json.dumps(description, indent=2, ensure_ascii=False))
+        else:
+            print(description)
         
     except Exception as e:
         print(f"Error: {e}")
