@@ -18,6 +18,7 @@ import json
 from datetime import datetime
 from generate_sku import SKUGenerator
 from prompts import get_enhanced_prompt
+from google_drive_integration import GoogleDriveIntegration, GOOGLE_DRIVE_AVAILABLE
 
 # Page configuration
 st.set_page_config(
@@ -36,16 +37,6 @@ def extract_sku_from_description(description) -> str:
             return None
         else:
             return None
-    
-    # Handle string response (legacy support)
-    if isinstance(description, str):
-        lines = description.split('\n')
-        for line in lines:
-            if line.startswith("SKU:"):
-                sku = line.replace("SKU:", "").strip()
-                return sku
-    
-    return None
 
 def get_csv_path(local_folder: str) -> str:
     """Get the path to the CSV file in the local folder"""
@@ -126,44 +117,6 @@ def extract_product_info_from_description(description) -> dict:
         info['URLs'] = str(description.get('urls', [])) if isinstance(description.get('urls'), list) else description.get('urls', '')
         
         return info
-    
-    # Handle string response (legacy support)
-    if isinstance(description, str):
-        lines = description.split('\n')
-        for line in lines:
-            line = line.strip()
-            if line.startswith('SKU:'):
-                info['SKU'] = line.replace('SKU:', '').strip()
-            elif line.startswith('Reference Number:'):
-                info['Reference_Number'] = line.replace('Reference Number:', '').strip()
-            elif line.startswith('Brand:'):
-                info['Brand'] = line.replace('Brand:', '').strip()
-            elif line.startswith('Model:'):
-                info['Model'] = line.replace('Model:', '').strip()
-            elif line.startswith('Material:'):
-                info['Material'] = line.replace('Material:', '').strip()
-            elif line.startswith('Color:'):
-                info['Color'] = line.replace('Color:', '').strip()
-            elif line.startswith('Size:'):
-                info['Size'] = line.replace('Size:', '').strip()
-            elif line.startswith('Year of Production:'):
-                info['Year_of_Production'] = line.replace('Year of Production:', '').strip()
-            elif line.startswith('Category:'):
-                info['Category'] = line.replace('Category:', '').strip()
-            elif line.startswith('Sub-category:'):
-                info['Sub_category'] = line.replace('Sub-category:', '').strip()
-            elif line.startswith('Condition Grade:'):
-                info['Condition_Grade'] = line.replace('Condition Grade:', '').strip()
-            elif line.startswith('Condition Description:'):
-                info['Condition_Description'] = line.replace('Condition Description:', '').strip()
-            elif line.startswith('Accessories:'):
-                info['Accessories'] = line.replace('Accessories:', '').strip()
-            elif line.startswith('Retail Price:'):
-                info['Retail_Price'] = line.replace('Retail Price:', '').strip()
-            elif line.startswith('Recommended Selling Price:'):
-                info['Recommended_Selling_Price'] = line.replace('Recommended Selling Price:', '').strip()
-    
-    return info
 
 def add_product_to_csv(csv_path: str, product_info: dict, chinese_description: str, 
                       image_count: int, folder_path: str, description_file: str):
@@ -258,7 +211,7 @@ def save_to_local_folder(sku: str, image_data: list, description: str, output_fi
         saved_files = []
         
         # Save description file with SKU-based naming
-        description_filename = f"{sku}_description.txt"
+        description_filename = f"{sku}_description.json"
         description_path = os.path.join(folder_path, description_filename)
         
         # Handle both string and JSON descriptions
@@ -356,6 +309,14 @@ def main():
         st.session_state.drag_mode = False
     if 'uploader_key' not in st.session_state:
         st.session_state.uploader_key = 'default'
+    if 'enable_google_drive' not in st.session_state:
+        st.session_state.enable_google_drive = False
+    if 'google_drive' not in st.session_state:
+        st.session_state.google_drive = None
+    if 'sync_to_sheets' not in st.session_state:
+        st.session_state.sync_to_sheets = True
+    if 'spreadsheet_name' not in st.session_state:
+        st.session_state.spreadsheet_name = f"SKU_Inventory"
     
     # Debug: Show current session state
     if st.checkbox("🔍 Debug: Show Session State"):
@@ -364,7 +325,10 @@ def main():
             "selected_image_idx": st.session_state.selected_image_idx,
             "confirm_remove_all": st.session_state.confirm_remove_all,
             "drag_mode": st.session_state.drag_mode,
-            "uploader_key": st.session_state.uploader_key
+            "uploader_key": st.session_state.uploader_key,
+            "enable_google_drive": st.session_state.enable_google_drive,
+            "google_drive_connected": st.session_state.google_drive is not None,
+            "sync_to_sheets": st.session_state.sync_to_sheets
         })
     
     # Sidebar for configuration
@@ -418,6 +382,68 @@ def main():
                     st.success(f"✅ Folder ready: {local_folder}")
                 except Exception as e:
                     st.error(f"❌ Cannot create folder: {str(e)}")
+        
+        # Google Drive integration
+        st.markdown("---")
+        st.markdown("### ☁️ Google Drive Integration")
+        
+        if not GOOGLE_DRIVE_AVAILABLE:
+            st.warning("⚠️ Google Drive libraries not installed. Run: `pip install -r requirements.txt`")
+        else:
+            enable_google_drive = st.checkbox(
+                "Enable Google Drive Upload",
+                value=st.session_state.get('enable_google_drive', False),
+                key='enable_google_drive',
+                help="Upload files to Google Drive and sync CSV to Google Sheets"
+            )
+            
+            if enable_google_drive:
+                google_credentials_path = st.text_input(
+                    "Google API Credentials Path",
+                    value=st.session_state.get('google_credentials_path', "credentials.json"),
+                    key='google_credentials_path',
+                    help="Path to your Google API credentials.json file"
+                )
+                
+                if google_credentials_path and os.path.exists(google_credentials_path):
+                    st.success("✅ Google credentials found!")
+                    
+                    # Initialize Google Drive integration
+                    try:
+                        google_drive = GoogleDriveIntegration(google_credentials_path)
+                        if google_drive.drive_service:
+                            st.success("✅ Google Drive connected successfully!")
+                            # Store in session state
+                            st.session_state.google_drive = google_drive
+                        else:
+                            st.error("❌ Failed to connect to Google Drive")
+                            st.session_state.google_drive = None
+                    except Exception as e:
+                        st.error(f"❌ Google Drive error: {str(e)}")
+                        st.session_state.google_drive = None
+                else:
+                    st.warning("⚠️ Please provide path to credentials.json file")
+                    st.session_state.google_drive = None
+                    
+                # CSV to Google Sheets sync option
+                sync_to_sheets = st.checkbox(
+                    "Sync CSV to Google Sheets",
+                    value=st.session_state.get('sync_to_sheets', True),
+                    key='sync_to_sheets',
+                    help="Automatically sync inventory CSV to Google Sheets"
+                )
+                
+                # Spreadsheet name
+                spreadsheet_name = st.text_input(
+                    "Google Sheets Name",
+                    value=st.session_state.get('spreadsheet_name', f"SKU_Inventory"),
+                    key='spreadsheet_name',
+                    help="Name for the Google Sheets spreadsheet"
+                )
+            else:
+                # Clear Google Drive from session state if disabled
+                if 'google_drive' in st.session_state:
+                    del st.session_state.google_drive
         
         st.markdown("---")
         st.markdown("### Instructions")
@@ -493,15 +519,15 @@ def main():
         if uploaded_files:
             col_reset, col_info = st.columns([1, 3])
             with col_reset:
-                if st.button("🔄 Reset Uploader", help="Clear the file uploader to start fresh", type="secondary"):
+                if st.button("🔄 Remove All Images", help="Clear the file uploader to start fresh", type="secondary"):
                     st.session_state.uploader_key = f"reset_{datetime.now().timestamp()}"
                     st.session_state.ordered_images.clear()
                     st.session_state.selected_image_idx = None
                     st.session_state.confirm_remove_all = False
                     st.session_state.drag_mode = False
-                    st.success("✅ File uploader has been reset!")
+                    st.success("✅ All images have been removed!")
             with col_info:
-                st.info("💡 Use 'Reset Uploader' to clear files and start over, or 'Remove All Images' to clear the grid but keep uploader state.")
+                st.info("💡 Use 'Remove All Images' to clear files and start over, or 'Remove All Images' to clear the grid but keep uploader state.")
         
         if uploaded_files:
             st.success(f"Uploaded {len(uploaded_files)} images")
@@ -572,7 +598,6 @@ def main():
             **How to use (simulates drag & drop):**
             - **🎯 Pick Up**: Click image to select (gets elevated with shadow)
             - **📥 Drop**: Click destination to move image there
-            - **🗑️ Remove All**: Use button above to remove all images at once
             """)
             
             # Initialize interaction state
@@ -790,11 +815,15 @@ Please use this Chinese description to enhance your analysis and provide more ac
                 # JSON response - display in a structured format
                 st.subheader("📊 Generated Product Information")
                 
+                # Initialize edited_sku variable
+                edited_sku = st.session_state.generated_sku
+                
                 # Display SKU
                 if st.session_state.generated_sku:
                     edited_sku = st.text_input(
                         "SKU (Editable)",
                         value=st.session_state.generated_sku,
+                        key="sku_editor",
                         help="Edit the SKU if needed. This will be used for file naming and CSV tracking."
                     )
                     
@@ -816,17 +845,16 @@ Please use this Chinese description to enhance your analysis and provide more ac
                 # Try to parse edited JSON
                 try:
                     edited_description = json.loads(edited_json)
-                    # Preserve the SKU
-                    if st.session_state.generated_sku:
-                        edited_description['sku'] = st.session_state.generated_sku
+                    # Preserve the edited SKU
+                    if edited_sku:
+                        edited_description['sku'] = edited_sku
+                        st.session_state.generated_sku = edited_sku
                     st.session_state.generated_description = edited_description
                 except json.JSONDecodeError:
                     st.error("❌ Invalid JSON format. Please check your edits.")
                     edited_description = st.session_state.generated_description
                 
             else:
-                # String response (legacy support)
-                # Split description into SKU line and content
                 lines = st.session_state.generated_description.split('\n')
                 sku_line = ""
                 description_content = []
@@ -861,20 +889,22 @@ Please use this Chinese description to enhance your analysis and provide more ac
                 st.session_state.generated_description = edited_description
             
             # Action buttons
-            col_actions1, col_actions2 = st.columns(2)
+            col_actions1, col_actions2, col_actions3 = st.columns(3)
             
             with col_actions1:
                 # Download button
-                if st.session_state.generated_sku:
-                    output_filename = f"{st.session_state.generated_sku}_description.txt"
+                # Use the edited SKU for the filename
+                current_sku_for_filename = edited_sku if 'edited_sku' in locals() else st.session_state.generated_sku
+                if current_sku_for_filename:
+                    output_filename = f"{current_sku_for_filename}_description.json"
                 else:
-                    output_filename = "generated_sku.txt"
+                    output_filename = "generated_sku.json"
                 
                 st.download_button(
                     label="📥 Download Description",
                     data=json.dumps(edited_description, indent=2, ensure_ascii=False),
                     file_name=output_filename,
-                    mime="text/plain"
+                    mime="application/json"
                 )
             
             with col_actions2:
@@ -883,7 +913,7 @@ Please use this Chinese description to enhance your analysis and provide more ac
                     if st.button("📁 Save to Local Folder", type="primary"):
                         with st.spinner("Saving to local folder..."):
                             # Use the current SKU (which may have been edited)
-                            current_sku = st.session_state.generated_sku
+                            current_sku = edited_sku if 'edited_sku' in locals() else st.session_state.generated_sku
                             save_result = save_to_local_folder(
                                 current_sku, 
                                 st.session_state.image_data, 
@@ -928,35 +958,20 @@ Please use this Chinese description to enhance your analysis and provide more ac
                                         extensions.append('.jpg')
                                 
                                 structure_lines = [f"{save_result['folder_name']}/"]
-                                structure_lines.append(f"├── {st.session_state.generated_sku}_description.txt")
+                                structure_lines.append(f"├── {current_sku}_description.json")
                                 
                                 for i, ext in enumerate(extensions, 1):
                                     if i == len(extensions):
-                                        structure_lines.append(f"└── {st.session_state.generated_sku}_{i}{ext}")
+                                        structure_lines.append(f"└── {current_sku}_{i}{ext}")
                                     else:
-                                        structure_lines.append(f"├── {st.session_state.generated_sku}_{i}{ext}")
+                                        structure_lines.append(f"├── {current_sku}_{i}{ext}")
                                 
                                 st.code('\n'.join(structure_lines))
                                 
-                                # Clear all data for next product
+                                # Success message
                                 st.markdown("---")
-                                st.success("🎉 **Product processed successfully! Ready for next product.**")
-                                
-                                # Clear session state for fresh start
-                                st.session_state.show_review = False
-                                st.session_state.generated_description = ""
-                                st.session_state.generated_sku = ""
-                                st.session_state.image_paths = []
-                                st.session_state.image_data = []
-                                st.session_state.ordered_images = []
-                                st.session_state.show_order_info = False
-                                st.session_state.show_preview = False
-                                st.session_state.selected_image_idx = None
-                                st.session_state.confirm_remove_all = False
-                                st.session_state.drag_mode = False
-                                
-                                # Clear file uploader by rerunning
-                                st.rerun()
+                                st.success("🎉 **Product saved successfully!**")
+                                st.info("💡 You can now upload to Google Drive or continue editing. Use 'Generate New Description' to start over.")
                             else:
                                 st.error(f"❌ Save failed: {save_result['error']}")
                 elif save_to_folder and not st.session_state.generated_sku:
@@ -965,6 +980,86 @@ Please use this Chinese description to enhance your analysis and provide more ac
                     st.warning("⚠️ Cannot save: No folder path specified")
                 elif not save_to_folder:
                     st.info("💡 Enable 'Save to Local Folder' in sidebar to save files")
+            
+            # Test Google Sheets connection button
+            if 'enable_google_drive' in st.session_state and st.session_state.get('enable_google_drive'):
+                if 'google_drive' in st.session_state and st.session_state.get('google_drive'):
+                    if st.button("🧪 Test Google Sheets Connection", type="secondary"):
+                        with st.spinner("Testing Google Sheets connection..."):
+                            try:
+                                # Test by trying to create a test spreadsheet
+                                test_result = st.session_state.google_drive.create_or_update_spreadsheet(
+                                    "TEST_CONNECTION", 
+                                    [{"test": "data", "status": "working"}]
+                                )
+                                if test_result:
+                                    st.success("✅ Google Sheets connection working!")
+                                    st.info(f"Test spreadsheet created: {test_result}")
+                                else:
+                                    st.error("❌ Google Sheets connection failed")
+                            except Exception as e:
+                                st.error(f"❌ Test failed: {str(e)}")
+                                st.exception(e)
+            
+            with col_actions3:
+                # Google Drive upload button (always visible, but only functional if enabled)
+                if st.session_state.generated_sku:
+                    if 'enable_google_drive' in st.session_state and st.session_state.get('enable_google_drive'):
+                        if 'google_drive' in st.session_state and st.session_state.get('google_drive'):
+                            if st.button("☁️ Upload to Google Drive", type="secondary", disabled=False):
+                                with st.spinner("Uploading to Google Drive..."):
+                                    # Get the local folder path for the current SKU
+                                    current_sku = st.session_state.generated_sku
+                                    sku_folder = os.path.join(local_folder, current_sku) if local_folder else None
+                                    
+                                    if sku_folder and os.path.exists(sku_folder):
+                                        # Upload SKU folder to Google Drive
+                                        drive_result = st.session_state.google_drive.upload_sku_to_drive(
+                                            current_sku, 
+                                            sku_folder, 
+                                            chinese_description, 
+                                            reference_number
+                                        )
+                                        
+                                        if drive_result.get("success"):
+                                            st.success(f"✅ **{drive_result['message']}**")
+                                            st.info(f"📁 **Main Folder ID:** {drive_result['main_folder_id']}")
+                                            st.info(f"📁 **SKU Folder ID:** {drive_result['sku_folder_id']}")
+                                            st.info(f"📄 **Files Uploaded:** {len(drive_result['uploaded_files'])}")
+                                            
+                                            # Sync CSV to Google Sheets if enabled
+                                            if st.session_state.get('sync_to_sheets'):
+                                                csv_path = os.path.join(local_folder, "sku_inventory.csv")
+                                                if os.path.exists(csv_path):
+                                                    with st.spinner("Syncing CSV to Google Sheets..."):
+                                                        sheets_result = st.session_state.google_drive.sync_csv_to_sheets(
+                                                            csv_path, 
+                                                            st.session_state.get('spreadsheet_name', f"SKU_Inventory")
+                                                        )
+                                                        
+                                                        if sheets_result.get("success"):
+                                                            st.success(f"📊 **{sheets_result['message']}**")
+                                                            st.info(f"📈 **Rows Synced:** {sheets_result['rows_synced']}")
+                                                            st.info(f"🔗 **Spreadsheet:** [Open in Google Sheets]({sheets_result['spreadsheet_url']})")
+                                                        else:
+                                                            st.error(f"❌ **Sheets Sync Failed:** {sheets_result['error']}")
+                                                else:
+                                                    st.warning("⚠️ CSV file not found. Cannot sync to Google Sheets.")
+                                            else:
+                                                st.info("💡 CSV sync to Google Sheets is disabled in sidebar settings.")
+                                        else:
+                                            st.error(f"❌ **Drive Upload Failed:** {drive_result['error']}")
+                                    else:
+                                        st.error("❌ **Local folder not found.** Please save to local folder first.")
+                        else:
+                            st.button("☁️ Upload to Google Drive", type="secondary", disabled=True, 
+                                     help="Google Drive not connected. Check sidebar configuration.")
+                    else:
+                        st.button("☁️ Upload to Google Drive", type="secondary", disabled=True, 
+                                 help="Enable Google Drive in sidebar to use this feature.")
+                else:
+                    st.button("☁️ Upload to Google Drive", type="secondary", disabled=True, 
+                             help="Generate a description first to enable Google Drive upload.")
             
             # Reset button
             if st.button("🔄 Generate New Description"):
