@@ -318,19 +318,6 @@ def main():
     if 'spreadsheet_name' not in st.session_state:
         st.session_state.spreadsheet_name = f"SKU_Inventory"
     
-    # Debug: Show current session state
-    if st.checkbox("🔍 Debug: Show Session State"):
-        st.json({
-            "ordered_images_count": len(st.session_state.ordered_images),
-            "selected_image_idx": st.session_state.selected_image_idx,
-            "confirm_remove_all": st.session_state.confirm_remove_all,
-            "drag_mode": st.session_state.drag_mode,
-            "uploader_key": st.session_state.uploader_key,
-            "enable_google_drive": st.session_state.enable_google_drive,
-            "google_drive_connected": st.session_state.google_drive is not None,
-            "sync_to_sheets": st.session_state.sync_to_sheets
-        })
-    
     # Sidebar for configuration
     with st.sidebar:
         st.header("Configuration")
@@ -387,6 +374,66 @@ def main():
         st.markdown("---")
         st.markdown("### ☁️ Google Drive Integration")
         
+        # Collapsible setup guide
+        with st.expander("📚 Quick Setup Guide (Click to expand)", expanded=False):
+            st.markdown("""
+            **🚀 Quick Setup Steps:**
+            
+            1. **Create Google Cloud Project**
+               - Go to [Google Cloud Console](https://console.cloud.google.com/)
+               - Create new project → Enable Google Drive & Sheets APIs
+            
+            2. **Download credentials.json**
+               - Go to APIs & Services → Credentials
+               - Create OAuth 2.0 Client ID (Desktop app)
+               - Download and rename to `credentials.json`
+            
+            3. **Place credentials.json**
+               - Put it in the **same folder** as this app
+               - Same level as `streamlit_app.py`
+            
+            4. **Enter path in app**
+               - Use: `credentials.json` (just the filename)
+            
+            **📁 File Structure (What you should see):**
+            ```
+            Your-SKU-Folder/
+            ├── streamlit_app.py
+            ├── credentials.json  ← PUT HERE!
+            └── other files...
+            ```
+            
+            **❌ Common Mistakes:**
+            - Don't put in `venv/` folder
+            - Don't put in subfolders
+            - Don't leave in Downloads
+            
+            **🔗 Full Guide:** See `GOOGLE_DRIVE_SETUP.md` for detailed instructions
+            """)
+            
+            # Show what credentials.json should look like
+            with st.expander("🔍 What should my credentials.json look like?", expanded=False):
+                st.markdown("""
+                **Your credentials.json should contain these fields:**
+                
+                ```json
+                {
+                  "type": "service_account",
+                  "project_id": "your-project-name",
+                  "private_key_id": "abc123...",
+                  "private_key": "-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----\\n",
+                  "client_email": "your-service@your-project.iam.gserviceaccount.com",
+                  "client_id": "123456789...",
+                  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                  "token_uri": "https://oauth2.googleapis.com/token",
+                  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+                  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/..."
+                }
+                ```
+                
+                **⚠️ Important:** Never share this file or commit it to version control!
+                """)
+        
         if not GOOGLE_DRIVE_AVAILABLE:
             st.warning("⚠️ Google Drive libraries not installed. Run: `pip install -r requirements.txt`")
         else:
@@ -398,12 +445,52 @@ def main():
             )
             
             if enable_google_drive:
-                google_credentials_path = st.text_input(
-                    "Google API Credentials Path",
-                    value=st.session_state.get('google_credentials_path', "credentials.json"),
-                    key='google_credentials_path',
-                    help="Path to your Google API credentials.json file"
+                # Credentials path input with clear examples
+                st.markdown("**🔑 Google API Credentials Path:**")
+                
+                # Path input options
+                path_option = st.radio(
+                    "Choose how to specify your credentials:",
+                    ["📂 Custom path", "📤 Upload credentials file"],
+                    key="path_option"
                 )
+                
+                if path_option == "📂 Custom path":
+                    google_credentials_path = st.text_input(
+                        "Enter full path to credentials.json:",
+                        value=st.session_state.get('google_credentials_path', ""),
+                        key='google_credentials_path',
+                        placeholder="e.g., C:\\Users\\YourName\\Desktop\\credentials.json",
+                        help="Full path to your credentials.json file"
+                    )
+                
+                else:  # Upload option
+                    uploaded_creds = st.file_uploader(
+                        "Upload your credentials.json file:",
+                        type=['json'],
+                        key='creds_uploader',
+                        help="Select your credentials.json file from Google Cloud Console"
+                    )
+                    
+                    if uploaded_creds:
+                        # Save the uploaded file temporarily
+                        temp_creds_path = "temp_credentials.json"
+                        with open(temp_creds_path, "wb") as f:
+                            f.write(uploaded_creds.getvalue())
+                        google_credentials_path = temp_creds_path
+                        st.success("✅ Credentials file uploaded successfully!")
+                        st.info("💡 **Note:** File will be used for this session. For permanent use, move it to the app folder.")
+                    else:
+                        google_credentials_path = ""
+                        st.info("📤 **Please upload your credentials.json file**")
+                
+                # Helpful tips based on path option
+                if path_option == "📂 Custom path":
+                    if not google_credentials_path:
+                        st.info("💡 **Examples:**")
+                        st.code("Windows: C:\\Users\\YourName\\Desktop\\credentials.json\nMac/Linux: /Users/YourName/Desktop/credentials.json")
+                    elif not os.path.exists(google_credentials_path):
+                        st.warning("⚠️ **File not found.** Please check the path and make sure the file exists.")
                 
                 if google_credentials_path and os.path.exists(google_credentials_path):
                     st.success("✅ Google credentials found!")
