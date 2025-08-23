@@ -12,11 +12,12 @@ IMPORTANT: You MUST respond with ONLY valid JSON. Do not include any text before
 The JSON should have the following structure:
 {{
     "category": "Category, e.g. bag, watch, shoe...",
-    "sub_category": "Sub-category, e.g., handbag, wallet, etc.",
+    "sub_category": "Sub-category, e.g., handbags, shoulder bags, totes, bags, crossbody bags, satchels, bowling bags, mini bags, others.",
     "brand": "Brand Name",
     "model": "Model Name",
     "material": "Material Description, e.g., leather, cotton, polyester, etc.",
-    "color": "Color Description, e.g., black, white, beige, red, blue, brown, pink",
+    "color": "Main exterior color Description, e.g., black, white, beige, red, blue, brown, pink",
+    "pattern": "Pattern Description, e.g., plain, floral, striped, polkadots, others",
     "size": "Size Information, provide mini,small,medium,large",
     "height": "Height in inches",
     "width": "Width in inches",

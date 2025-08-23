@@ -33,12 +33,25 @@ class GoogleDriveIntegration:
         self.drive_service = None
         self.sheets_service = None
         self.gspread_client = None
+        self._authenticated = False
         
-        if GOOGLE_DRIVE_AVAILABLE:
+        # Don't authenticate immediately - wait until needed
+        # if GOOGLE_DRIVE_AVAILABLE:
+        #     self._authenticate()
+    
+    def _ensure_authenticated(self):
+        """Ensure authentication is done before using Google services"""
+        if not GOOGLE_DRIVE_AVAILABLE:
+            raise Exception("Google Drive libraries not installed. Run: pip install -r requirements.txt")
+        
+        if not self._authenticated:
             self._authenticate()
     
     def _authenticate(self):
         """Authenticate with Google Drive and Sheets"""
+        if self._authenticated:
+            return
+            
         try:
             # Google Drive API authentication
             SCOPES = [
@@ -129,6 +142,8 @@ class GoogleDriveIntegration:
             except Exception as gspread_error:
                 print(f"Error initializing gspread client: {gspread_error}")
                 self.gspread_client = None
+            
+            self._authenticated = True
                 
         except Exception as e:
             print(f"Error authenticating with Google: {e}")
@@ -137,9 +152,11 @@ class GoogleDriveIntegration:
             self.drive_service = None
             self.sheets_service = None
             self.gspread_client = None
+            self._authenticated = False
     
     def find_folder_by_name(self, folder_name: str, parent_folder_id: str = None) -> Optional[str]:
         """Find a folder by name in Google Drive"""
+        # Only authenticate when actually needed for upload operations
         if not self.drive_service:
             return None
             
@@ -167,6 +184,7 @@ class GoogleDriveIntegration:
     
     def create_folder(self, folder_name: str, parent_folder_id: str = None) -> Optional[str]:
         """Create a folder in Google Drive"""
+        # Only authenticate when actually needed for upload operations
         if not self.drive_service:
             return None
             
@@ -191,6 +209,7 @@ class GoogleDriveIntegration:
     
     def upload_file(self, file_path: str, folder_id: str = None, filename: str = None) -> Optional[str]:
         """Upload a file to Google Drive"""
+        # Only authenticate when actually needed for upload operations
         if not self.drive_service:
             return None
             
@@ -218,8 +237,9 @@ class GoogleDriveIntegration:
             print(f'Error uploading file: {error}')
             return None
     
-    def upload_file_from_data(self, file_data: bytes, filename: str, folder_id: str = None) -> Optional[str]:
+    def upload_file_from_data(self, file_data: str, filename: str, folder_id: str = None) -> Optional[str]:
         """Upload file data directly to Google Drive"""
+        # Only authenticate when actually needed for upload operations
         if not self.drive_service:
             return None
             
@@ -250,9 +270,94 @@ class GoogleDriveIntegration:
             print(f'Error uploading file data: {error}')
             return None
     
+
+
+    def _find_spreadsheet_in_folder(self, spreadsheet_name: str) -> Optional[str]:
+        """Find a spreadsheet by name inside the SKU_Generator folder"""
+        # Only authenticate when actually needed for upload operations
+        if not self.drive_service:
+            return None
+            
+        try:
+            # Find the SKU_Generator folder
+            main_folder_id = self.find_folder_by_name("SKU_Generator")
+            if not main_folder_id:
+                return None
+            
+            # Search for the spreadsheet inside the SKU_Generator folder
+            query = f"name='{spreadsheet_name}' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false and '{main_folder_id}' in parents"
+            
+            results = self.drive_service.files().list(
+                q=query,
+                spaces='drive',
+                fields='files(id, name)'
+            ).execute()
+            
+            files = results.get('files', [])
+            if files:
+                return files[0]['id']  # Return first matching spreadsheet
+            return None
+            
+        except HttpError as error:
+            print(f'Error finding spreadsheet in folder: {error}')
+            return None
+    
+    def _create_spreadsheet_in_folder(self, spreadsheet_name: str) -> Optional[str]:
+        """Create a new spreadsheet directly inside the SKU_Generator folder"""
+        # Only authenticate when actually needed for upload operations
+        if not self.drive_service or not self.gspread_client:
+            return None
+            
+        try:
+            # Find or create the SKU_Generator folder
+            main_folder_id = self.find_folder_by_name("SKU_Generator")
+            if not main_folder_id:
+                main_folder_id = self.create_folder("SKU_Generator")
+            
+            if not main_folder_id:
+                print("Warning: Could not create SKU_Generator folder for spreadsheet")
+                return None
+            
+            # Create the spreadsheet using gspread
+            spreadsheet = self.gspread_client.create(spreadsheet_name)
+            spreadsheet_id = spreadsheet.id
+            
+            # Move the spreadsheet to the SKU_Generator folder
+            file = self.drive_service.files().update(
+                fileId=spreadsheet_id,
+                addParents=main_folder_id,
+                removeParents='root',
+                fields='id, parents'
+            ).execute()
+            
+            print(f"Created new spreadsheet '{spreadsheet_name}' in SKU_Generator folder: {spreadsheet_id}")
+            return spreadsheet_id
+            
+        except Exception as e:
+            print(f"Error creating spreadsheet in folder: {e}")
+            return None
+
+    def ensure_spreadsheet_in_folder(self, spreadsheet_name: str) -> bool:
+        """Ensure an existing spreadsheet is in the SKU_Generator folder"""
+        # Only authenticate when actually needed for upload operations
+        if not self.gspread_client or not self.drive_service:
+            return False
+            
+        try:
+            # Try to open the existing spreadsheet
+            spreadsheet = self.gspread_client.open(spreadsheet_name)
+            return self._ensure_spreadsheet_in_folder(spreadsheet.id, spreadsheet_name)
+        except gspread.SpreadsheetNotFound:
+            print(f"Spreadsheet '{spreadsheet_name}' not found")
+            return False
+        except Exception as e:
+            print(f"Error ensuring spreadsheet is in folder: {e}")
+            return False
+
     def create_or_update_spreadsheet(self, spreadsheet_name: str, data: List[Dict], 
                                    sheet_name: str = "Inventory", optimize_folder_check: bool = True) -> Optional[str]:
         """Create or update a Google Spreadsheet with inventory data"""
+        self._ensure_authenticated()
         if not self.gspread_client:
             print("Error: gspread client not initialized")
             return None
@@ -260,73 +365,36 @@ class GoogleDriveIntegration:
         try:
             print(f"Attempting to create/update spreadsheet: {spreadsheet_name}")
             
+            # First, check if spreadsheet exists in the SKU_Generator folder
+            spreadsheet_id_in_folder = None
+            if self.drive_service and optimize_folder_check:
+                spreadsheet_id_in_folder = self._find_spreadsheet_in_folder(spreadsheet_name)
+            
             # Try to open existing spreadsheet
             try:
-                print("Looking for existing spreadsheet...")
-                spreadsheet = self.gspread_client.open(spreadsheet_name)
+                if spreadsheet_id_in_folder:
+                    print(f"Found existing spreadsheet '{spreadsheet_name}' in SKU_Generator folder")
+                    # Open by ID to ensure we get the right one
+                    spreadsheet = self.gspread_client.open_by_key(spreadsheet_id_in_folder)
+                else:
+                    print("Looking for existing spreadsheet...")
+                    spreadsheet = self.gspread_client.open(spreadsheet_name)
+                
                 print(f"Found existing spreadsheet: {spreadsheet.title}")
                 
-                # Only check folder location if we have drive service and optimization is enabled
-                if self.drive_service and optimize_folder_check:
-                    try:
-                        # Find SKU_Generator main folder
-                        main_folder_id = self.find_folder_by_name("SKU_Generator")
-                        if main_folder_id:
-                            # Check if spreadsheet is already in the folder
-                            spreadsheet_id = spreadsheet.id
-                            file_info = self.drive_service.files().get(
-                                fileId=spreadsheet_id,
-                                fields='parents'
-                                ).execute()
-                            
-                            current_parents = file_info.get('parents', [])
-                            if main_folder_id not in current_parents:
-                                # Move the file to the SKU_Generator folder
-                                file = self.drive_service.files().update(
-                                    fileId=spreadsheet_id,
-                                    addParents=main_folder_id,
-                                    removeParents='root',
-                                    fields='id, parents'
-                                ).execute()
-                                
-                                print(f"Existing spreadsheet moved to SKU_Generator folder: {spreadsheet_id}")
-                            else:
-                                print(f"Spreadsheet already in SKU_Generator folder: {spreadsheet_id}")
-                        else:
-                            print("Warning: SKU_Generator folder not found for spreadsheet")
-                    except Exception as move_error:
-                        print(f"Warning: Could not check/move existing spreadsheet: {move_error}")
-                
             except gspread.SpreadsheetNotFound:
-                print("Creating new spreadsheet...")
-                spreadsheet = self.gspread_client.create(spreadsheet_name)
-                print(f"Created new spreadsheet: {spreadsheet.title}")
-                
-                # Move the new spreadsheet to SKU_Generator folder
+                print("Creating new spreadsheet in SKU_Generator folder...")
                 if self.drive_service:
-                    try:
-                        # Find or create SKU_Generator main folder
-                        main_folder_id = self.find_folder_by_name("SKU_Generator")
-                        if not main_folder_id:
-                            main_folder_id = self.create_folder("SKU_Generator")
-                        
-                        if main_folder_id:
-                            # Get the spreadsheet file ID from gspread
-                            spreadsheet_id = spreadsheet.id
-                            
-                            # Move the file to the SKU_Generator folder
-                            file = self.drive_service.files().update(
-                                fileId=spreadsheet_id,
-                                addParents=main_folder_id,
-                                removeParents='root',
-                                fields='id, parents'
-                            ).execute()
-                            
-                            print(f"Spreadsheet moved to SKU_Generator folder: {spreadsheet_id}")
-                        else:
-                            print("Warning: Could not create SKU_Generator folder for spreadsheet")
-                    except Exception as move_error:
-                        print(f"Warning: Could not move spreadsheet to SKU_Generator folder: {move_error}")
+                    # Create directly in the folder
+                    spreadsheet_id = self._create_spreadsheet_in_folder(spreadsheet_name)
+                    if spreadsheet_id:
+                        spreadsheet = self.gspread_client.open_by_key(spreadsheet_id)
+                        print(f"Created new spreadsheet: {spreadsheet.title}")
+                    else:
+                        print("Warning: Could not create spreadsheet in folder, creating in root...")
+                        spreadsheet = self.gspread_client.create(spreadsheet_name)
+                else:
+                    spreadsheet = self.gspread_client.create(spreadsheet_name)
                 
             except Exception as e:
                 print(f"Error accessing spreadsheet: {e}")
@@ -390,6 +458,7 @@ class GoogleDriveIntegration:
     def quick_update_spreadsheet(self, spreadsheet_name: str, data: List[Dict], 
                                 sheet_name: str = "Inventory") -> Optional[str]:
         """Quick update spreadsheet without folder optimization checks (faster, fewer API calls)"""
+        self._ensure_authenticated()
         if not self.gspread_client:
             print("Error: gspread client not initialized")
             return None
@@ -399,12 +468,31 @@ class GoogleDriveIntegration:
             
             # Try to open existing spreadsheet
             try:
-                spreadsheet = self.gspread_client.open(spreadsheet_name)
+                # First, check if spreadsheet exists in the SKU_Generator folder
+                spreadsheet_id_in_folder = None
+                if self.drive_service:
+                    spreadsheet_id_in_folder = self._find_spreadsheet_in_folder(spreadsheet_name)
+                
+                if spreadsheet_id_in_folder:
+                    print(f"Found existing spreadsheet '{spreadsheet_name}' in SKU_Generator folder")
+                    spreadsheet = self.gspread_client.open_by_key(spreadsheet_id_in_folder)
+                else:
+                    spreadsheet = self.gspread_client.open(spreadsheet_name)
+                
                 print(f"Found existing spreadsheet: {spreadsheet.title}")
             except gspread.SpreadsheetNotFound:
-                print("Creating new spreadsheet...")
-                spreadsheet = self.gspread_client.create(spreadsheet_name)
-                print(f"Created new spreadsheet: {spreadsheet.title}")
+                print("Creating new spreadsheet in SKU_Generator folder...")
+                if self.drive_service:
+                    # Create directly in the folder
+                    spreadsheet_id = self._create_spreadsheet_in_folder(spreadsheet_name)
+                    if spreadsheet_id:
+                        spreadsheet = self.gspread_client.open_by_key(spreadsheet_id)
+                        print(f"Created new spreadsheet: {spreadsheet.title}")
+                    else:
+                        print("Warning: Could not create spreadsheet in folder, creating in root...")
+                        spreadsheet = self.gspread_client.create(spreadsheet_name)
+                else:
+                    spreadsheet = self.gspread_client.create(spreadsheet_name)
             
             # Get or create worksheet
             try:
@@ -444,6 +532,7 @@ class GoogleDriveIntegration:
     def smart_update_spreadsheet(self, spreadsheet_name: str, new_data: List[Dict], 
                                 sheet_name: str = "Inventory") -> Optional[str]:
         """Smart update: only adds new rows, doesn't overwrite existing data"""
+        self._ensure_authenticated()
         if not self.gspread_client:
             print("Error: gspread client not initialized")
             return None
@@ -453,12 +542,31 @@ class GoogleDriveIntegration:
             
             # Try to open existing spreadsheet
             try:
-                spreadsheet = self.gspread_client.open(spreadsheet_name)
+                # First, check if spreadsheet exists in the SKU_Generator folder
+                spreadsheet_id_in_folder = None
+                if self.drive_service:
+                    spreadsheet_id_in_folder = self._find_spreadsheet_in_folder(spreadsheet_name)
+                
+                if spreadsheet_id_in_folder:
+                    print(f"Found existing spreadsheet '{spreadsheet_name}' in SKU_Generator folder")
+                    spreadsheet = self.gspread_client.open_by_key(spreadsheet_id_in_folder)
+                else:
+                    spreadsheet = self.gspread_client.open(spreadsheet_name)
+                
                 print(f"Found existing spreadsheet: {spreadsheet.title}")
             except gspread.SpreadsheetNotFound:
-                print("Creating new spreadsheet...")
-                spreadsheet = self.gspread_client.create(spreadsheet_name)
-                print(f"Created new spreadsheet: {spreadsheet.title}")
+                print("Creating new spreadsheet in SKU_Generator folder...")
+                if self.drive_service:
+                    # Create directly in the folder
+                    spreadsheet_id = self._create_spreadsheet_in_folder(spreadsheet_name)
+                    if spreadsheet_id:
+                        spreadsheet = self.gspread_client.open_by_key(spreadsheet_id)
+                        print(f"Created new spreadsheet: {spreadsheet.title}")
+                    else:
+                        print("Warning: Could not create spreadsheet in folder, creating in root...")
+                        spreadsheet = self.gspread_client.create(spreadsheet_name)
+                else:
+                    spreadsheet = self.gspread_client.create(spreadsheet_name)
             
             # Get or create worksheet
             try:
@@ -550,6 +658,7 @@ class GoogleDriveIntegration:
     def upload_sku_to_drive(self, sku: str, local_sku_folder: str, 
                            chinese_description: str = "", reference_number: str = "") -> Dict:
         """Upload complete SKU folder to Google Drive"""
+        self._ensure_authenticated()
         if not self.drive_service:
             return {"success": False, "error": "Google Drive not authenticated"}
         
@@ -628,6 +737,7 @@ class GoogleDriveIntegration:
     
     def sync_csv_to_sheets(self, csv_path: str, spreadsheet_name: str = None) -> Dict:
         """Sync CSV data to Google Sheets"""
+        self._ensure_authenticated()
         if not self.gspread_client:
             return {"success": False, "error": "Google Sheets not authenticated"}
         
@@ -662,6 +772,31 @@ class GoogleDriveIntegration:
         except Exception as e:
             return {"success": False, "error": f"Sync failed: {str(e)}"}
 
+    def is_ready(self) -> bool:
+        """Check if the integration is ready to use (has credentials path)"""
+        return self.credentials_path is not None and os.path.exists(self.credentials_path)
+    
+    def get_status(self) -> Dict:
+        """Get the current status of the integration without forcing authentication"""
+        return {
+            "credentials_path": self.credentials_path,
+            "credentials_exist": self.credentials_path is not None and os.path.exists(self.credentials_path),
+            "authenticated": self._authenticated,
+            "drive_service_ready": self.drive_service is not None,
+            "sheets_service_ready": self.sheets_service is not None,
+            "gspread_client_ready": self.gspread_client is not None,
+            "status": "dormant" if not self._authenticated else "active"
+        }
+    
+    def initialize_google_drive(self) -> bool:
+        """Manually initialize Google Drive (useful for testing or pre-warming)"""
+        try:
+            self._ensure_authenticated()
+            return self._authenticated
+        except Exception as e:
+            print(f"Failed to initialize Google Drive: {e}")
+            return False
+
 def test_google_drive_integration():
     """Test function for Google Drive integration"""
     if not GOOGLE_DRIVE_AVAILABLE:
@@ -673,6 +808,19 @@ def test_google_drive_integration():
     if os.path.exists(credentials_path):
         integration = GoogleDriveIntegration(credentials_path)
         print("Google Drive integration initialized successfully!")
+        print("Note: Authentication will only happen when you actually use Google Drive features.")
+        
+        # Show initial status (not authenticated yet)
+        status = integration.get_status()
+        print(f"Initial status: {status}")
+        print("✅ No Google APIs called yet - completely dormant!")
+        
+        # Test the new folder organization functionality
+        print("\nTesting folder organization...")
+        print("All spreadsheets will now be automatically created in the SKU_Generator folder.")
+        print("The system checks the folder first, then creates new spreadsheets there if needed.")
+        print("\n💡 Google Drive will only initialize when you click 'Upload to Google Drive'!")
+        
         return integration
     else:
         print("No credentials.json found. Please set up Google Drive API credentials.")

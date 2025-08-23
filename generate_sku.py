@@ -91,14 +91,14 @@ class SKUGenerator:
                 "error": "Failed to parse JSON response",
                 "raw_response": response.text,
                 "reference_number": reference_number,
-                "sku": f"error-error-error-error-error-{reference_number}".upper()
+                "sku": f"error-error-error-error-error-{reference_number}".lower()
             }
         except Exception as e:
             print(f"Error processing response: {e}")
             return {
                 "error": f"Error processing response: {str(e)}",
                 "reference_number": reference_number,
-                "sku": f"error-error-error-error-error-{reference_number}".upper()
+                "sku": f"error-error-error-error-error-{reference_number}".lower()
             }
 
     def generate_sku_from_json(self, json_data: dict, reference_number: str) -> str:
@@ -121,12 +121,12 @@ class SKUGenerator:
             # Generate SKU in the specified format
             sku = f"{color}-{material}-{model}-{brand}-{sub_category}-{reference_number}"
             
-            return sku.upper()
+            return sku.lower()
             
         except Exception as e:
             print(f"Warning: Error generating SKU: {e}")
             # Return a fallback SKU
-            return f"unknown-unknown-unknown-unknown-unknown-{reference_number}".upper()
+            return f"unknown-unknown-unknown-unknown-unknown-{reference_number}".lower()
 
     def generate_sku_description(self, folder_path: str, output_file: str):
         """Generate SKU description from images in the folder"""
